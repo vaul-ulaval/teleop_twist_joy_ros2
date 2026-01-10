@@ -46,6 +46,7 @@ using namespace std;
 #include <cmath>
 #define _USE_MATH_DEFINES
 #include <array>
+#include <std_msgs/msg/int32.hpp>
 
 // takes input [0, 1] for the left and right joystick, output Ux and Theta.dot Z, witch go into a twist file for the
 // motor drivers
@@ -64,6 +65,7 @@ struct TeleopTwistJoy::Impl {
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr lock_autonomy_pub;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr led_pub_;
 
   bool require_enable_button;
   bool require_autonomy_button;
@@ -84,6 +86,10 @@ struct TeleopTwistJoy::Impl {
   array<float, 2> motionconverter(float gauche, float droit);
 
   bool sent_disable_msg;
+
+  bool x_button_state_;
+  bool start_button_state_;
+  int led_state_;
 };
 
 /**
@@ -96,6 +102,7 @@ TeleopTwistJoy::TeleopTwistJoy(const rclcpp::NodeOptions& options) : Node("teleo
   pimpl_->lock_autonomy_pub = this->create_publisher<std_msgs::msg::Bool>("lock_autonomy", 10);
   pimpl_->joy_sub = this->create_subscription<sensor_msgs::msg::Joy>(
       "joy", rclcpp::QoS(10), std::bind(&TeleopTwistJoy::Impl::joyCallback, this->pimpl_, std::placeholders::_1));
+  pimpl_->led_pub_ = this->create_publisher<std_msgs::msg::Int32>("/led_state", 10);
 
   pimpl_->require_enable_button = this->declare_parameter("require_enable_button", true);
   pimpl_->require_autonomy_button = this->declare_parameter("require_autonomy_button", true);
@@ -294,6 +301,10 @@ TeleopTwistJoy::TeleopTwistJoy(const rclcpp::NodeOptions& options) : Node("teleo
   };
 
   callback_handle = this->add_on_set_parameters_callback(param_callback);
+
+  pimpl_->x_button_state_ = false;
+  pimpl_->start_button_state_ = false;
+  pimpl_->led_state_ = 0;
 }
 
 array<float, 2> TeleopTwistJoy::Impl::motionconverter(float gauche, float droit) {
@@ -326,6 +337,29 @@ void TeleopTwistJoy::Impl::sendCmdVelMsg(const sensor_msgs::msg::Joy::SharedPtr 
     cmd_vel_msg->angular.z = getVal(joy_msg, axis_angular_map, scale_angular_map[which_map], "yaw");
     cmd_vel_msg->angular.y = getVal(joy_msg, axis_angular_map, scale_angular_map[which_map], "pitch");
     cmd_vel_msg->angular.x = getVal(joy_msg, axis_angular_map, scale_angular_map[which_map], "roll");
+    // If all joystick axes are within the deadzone, publish a small non-zero base command
+    // so the robot does not receive all-zero cmd_vel when the enable button is held.
+    auto axis_within_deadzone = [&](const std::map<std::string, int64_t>& amap, const std::string& name) {
+      if (amap.find(name) == amap.end() || amap.at(name) == -1L)
+        return true; // treat unmapped axes as within deadzone
+      int idx = static_cast<int>(amap.at(name));
+      if (idx < 0 || idx >= static_cast<int>(joy_msg->axes.size()))
+        return true;
+      return std::fabs(joy_msg->axes[idx]) <= deadzone;
+    };
+
+    bool all_within_deadzone = axis_within_deadzone(axis_linear_map, "x") &&
+                               axis_within_deadzone(axis_linear_map, "y") &&
+                               axis_within_deadzone(axis_linear_map, "z") &&
+                               axis_within_deadzone(axis_angular_map, "yaw") &&
+                               axis_within_deadzone(axis_angular_map, "pitch") &&
+                               axis_within_deadzone(axis_angular_map, "roll");
+
+    if (all_within_deadzone) {
+      // small non-zero baseline command when enabled
+      cmd_vel_msg->linear.x = 0.01;
+      cmd_vel_msg->angular.z = 0.01;
+    }
   }
 
   else if (scale_linear_map[which_map].find("x") != scale_linear_map[which_map].end() &&
@@ -338,8 +372,8 @@ void TeleopTwistJoy::Impl::sendCmdVelMsg(const sensor_msgs::msg::Joy::SharedPtr 
     // if BOTH joy sticks are near default(0), send no message
     if ((left_stick_value < deadzone && left_stick_value > -deadzone) &&
         (right_stick_value < deadzone && right_stick_value > -deadzone)) {
-      cmd_vel_msg->linear.x = 0;
-      cmd_vel_msg->angular.z = 0;
+      cmd_vel_msg->linear.x = 0.01;
+      cmd_vel_msg->angular.z = 0.01;
     } else {
       cmd_vel_msg->linear.x = vel_x;
       cmd_vel_msg->angular.z = angular_vel_z;
@@ -373,6 +407,33 @@ void TeleopTwistJoy::Impl::joyCallback(const sensor_msgs::msg::Joy::SharedPtr jo
     std_msgs::msg::Bool lock_autonomy_msg;
     lock_autonomy_msg.data = !joy_msg->buttons[autonomy_button];
     lock_autonomy_pub->publish(lock_autonomy_msg);
+  }
+
+  // Assuming X button is at index 2 and START button is at index 7
+  const int X_BUTTON_INDEX = 2;
+  const int START_BUTTON_INDEX = 7;
+
+  // Debounce X button
+  bool x_button_pressed = joy_msg->buttons[X_BUTTON_INDEX] == 1;
+  if (x_button_pressed && !x_button_state_) {
+    x_button_state_ = true;
+    led_state_ = (led_state_ == 0) ? 1 : 0;  // Toggle between 0 and 1
+    auto msg = std_msgs::msg::Int32();
+    msg.data = led_state_;
+    led_pub_->publish(msg);
+  } else if (!x_button_pressed) {
+    x_button_state_ = false;
+  }
+
+  // Handle START button
+  bool start_button_pressed = joy_msg->buttons[START_BUTTON_INDEX] == 1;
+  if (start_button_pressed && !start_button_state_) {
+    start_button_state_ = true;
+    auto msg = std_msgs::msg::Int32();
+    msg.data = 4;
+    led_pub_->publish(msg);  // Publish 4 when START button is pressed
+  } else if (!start_button_pressed) {
+    start_button_state_ = false;
   }
 }
 
