@@ -340,20 +340,16 @@ void TeleopTwistJoy::Impl::sendCmdVelMsg(const sensor_msgs::msg::Joy::SharedPtr 
     // If all joystick axes are within the deadzone, publish a small non-zero base command
     // so the robot does not receive all-zero cmd_vel when the enable button is held.
     auto axis_within_deadzone = [&](const std::map<std::string, int64_t>& amap, const std::string& name) {
-      if (amap.find(name) == amap.end() || amap.at(name) == -1L)
-        return true; // treat unmapped axes as within deadzone
+      if (amap.find(name) == amap.end() || amap.at(name) == -1L) return true;  // treat unmapped axes as within deadzone
       int idx = static_cast<int>(amap.at(name));
-      if (idx < 0 || idx >= static_cast<int>(joy_msg->axes.size()))
-        return true;
+      if (idx < 0 || idx >= static_cast<int>(joy_msg->axes.size())) return true;
       return std::fabs(joy_msg->axes[idx]) <= deadzone;
     };
 
-    bool all_within_deadzone = axis_within_deadzone(axis_linear_map, "x") &&
-                               axis_within_deadzone(axis_linear_map, "y") &&
-                               axis_within_deadzone(axis_linear_map, "z") &&
-                               axis_within_deadzone(axis_angular_map, "yaw") &&
-                               axis_within_deadzone(axis_angular_map, "pitch") &&
-                               axis_within_deadzone(axis_angular_map, "roll");
+    bool all_within_deadzone =
+        axis_within_deadzone(axis_linear_map, "x") && axis_within_deadzone(axis_linear_map, "y") &&
+        axis_within_deadzone(axis_linear_map, "z") && axis_within_deadzone(axis_angular_map, "yaw") &&
+        axis_within_deadzone(axis_angular_map, "pitch") && axis_within_deadzone(axis_angular_map, "roll");
 
     if (all_within_deadzone) {
       // small non-zero baseline command when enabled
