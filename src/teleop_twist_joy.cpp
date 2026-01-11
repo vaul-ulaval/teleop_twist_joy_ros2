@@ -415,7 +415,7 @@ void TeleopTwistJoy::Impl::joyCallback(const sensor_msgs::msg::Joy::SharedPtr jo
     x_button_state_ = true;
     led_state_ = (led_state_ == 0) ? 1 : 0;  // Toggle between 0 and 1
     auto msg = std_msgs::msg::Int32();
-    msg.data = led_state_;
+    msg.data = !led_state_;
     led_pub_->publish(msg);
   } else if (!x_button_pressed) {
     x_button_state_ = false;
