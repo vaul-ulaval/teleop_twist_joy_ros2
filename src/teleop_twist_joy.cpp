@@ -70,6 +70,7 @@ namespace teleop_twist_joy
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_pub_twist_stamped;
 
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr lock_autonomy_pub;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr block_steering_pub;
     rclcpp::Clock::SharedPtr clock;
 
 
@@ -79,14 +80,20 @@ namespace teleop_twist_joy
     int64_t enable_axis;
     int64_t turbo_axis;
     int64_t track_control_button;
+    int64_t block_steering_button;
     int64_t autonomy_button;
     float exponential_scale;
     float deadzone;
     bool track_mode = false;
+    bool blocked_steering_mode = false;
+
     bool track_button_latch = false;
+    bool block_steering_button_latch = true;
     int64_t track_axis_left;
     int64_t track_axis_right;
     float base_width;
+    bool headlight_button;
+    int64_t plow_button;
 
     std::map<std::string, int64_t> axis_linear_map;
     std::map<std::string, std::map<std::string, double>> scale_linear_map;
@@ -116,6 +123,8 @@ namespace teleop_twist_joy
     }
     
     pimpl_->lock_autonomy_pub = this->create_publisher<std_msgs::msg::Bool>("lock_autonomy", 10);
+    pimpl_->block_steering_pub = this->create_publisher<std_msgs::msg::Bool>("block_steering", 10);
+
     pimpl_->joy_sub = this->create_subscription<sensor_msgs::msg::Joy>("joy", rclcpp::QoS(10),
                                                                        std::bind(&TeleopTwistJoy::Impl::joyCallback, this->pimpl_, std::placeholders::_1));
 
@@ -126,7 +135,11 @@ namespace teleop_twist_joy
     pimpl_->track_axis_left = this->declare_parameter("track_axis_left", 1);
     pimpl_->track_axis_right = this->declare_parameter("track_axis_right", 4);
     pimpl_->track_control_button = this->declare_parameter<int>("track_control_button", 4);
+    pimpl_->block_steering_button = this->declare_parameter<int>("block_steering_button", 1);
     pimpl_->autonomy_button = this->declare_parameter<int>("autonomy_button", 0);
+
+    pimpl_->plow_button = this->declare_parameter<int>("plowing_button", 8);
+    pimpl_->headlight_button = this->declare_parameter<int>("headlight_button",2);
 
     pimpl_->base_width = this->declare_parameter<float>("base_width", 0.5);
     pimpl_->deadzone = this->declare_parameter<float>("deadzone", 0.2);
@@ -188,6 +201,8 @@ namespace teleop_twist_joy
                         "Track control button %" PRId64 ".", pimpl_->track_control_button);
     ROS_INFO_COND_NAMED(pimpl_->require_autonomy_button, "TeleopTwistJoy",
                         "Autonomy enable button %" PRId64 ".", pimpl_->autonomy_button);
+    ROS_INFO_COND_NAMED(pimpl_->block_steering_button >= 0, "TeleopTwistJoy",
+                        "block steering enable button %" PRId64 ".", pimpl_->block_steering_button);
     ROS_INFO_COND_NAMED(pimpl_->track_axis_left >= 0, "TeleopTwistJoy",
                         "Track left axis %" PRId64 ".", pimpl_->track_axis_left);
     ROS_INFO_COND_NAMED(pimpl_->track_axis_right >= 0, "TeleopTwistJoy",
@@ -215,7 +230,7 @@ namespace teleop_twist_joy
     {
       static std::set<std::string> intparams = {"axis_linear.x", "axis_linear.y", "axis_linear.z",
                                                 "axis_angular.yaw", "axis_angular.pitch", "axis_angular.roll",
-                                                "enable_axis", "turbo_axis", "track_control_button", "autonomy_button",
+                                                "enable_axis", "turbo_axis", "track_control_button", "autonomy_button", "block_steering_button",
                                                 "track_axis_left", "track_axis_right"};
       static std::set<std::string> doubleparams = {"scale_linear.x", "scale_linear.y", "scale_linear.z",
                                                    "scale_linear_turbo.x", "scale_linear_turbo.y", "scale_linear_turbo.z",
@@ -272,6 +287,10 @@ namespace teleop_twist_joy
         {
           this->pimpl_->require_autonomy_button = parameter.get_value<rclcpp::PARAMETER_BOOL>();
         }
+        if (parameter.get_name() == "block_steering_button")
+        {
+          this->pimpl_->block_steering_button = parameter.get_value<rclcpp::PARAMETER_BOOL>();
+        }
         if (parameter.get_name() == "enable_axis")
         {
           this->pimpl_->enable_axis = parameter.get_value<rclcpp::PARAMETER_INTEGER>();
@@ -295,6 +314,10 @@ namespace teleop_twist_joy
         else if (parameter.get_name() == "autonomy_button")
         {
           this->pimpl_->autonomy_button = parameter.get_value<rclcpp::PARAMETER_INTEGER>();
+        }
+        else if (parameter.get_name() == "block_steering_button")
+        {
+          this->pimpl_->block_steering_button = parameter.get_value<rclcpp::PARAMETER_INTEGER>();
         }
         else if (parameter.get_name() == "base_width")
         {
@@ -491,8 +514,25 @@ namespace teleop_twist_joy
       lock_autonomy_pub->publish(lock_autonomy_msg);
     }
 
+    if (joy_msg->buttons[block_steering_button])
+    {
+        if (!block_steering_button_latch)
+        {
+            blocked_steering_mode = !blocked_steering_mode;
+            block_steering_button_latch = true;
+        }
+    }
+    else
+    {
+        block_steering_button_latch = false;
+    }
+  
+  std_msgs::msg::Bool block_steering_msg;
+  block_steering_msg.data = blocked_steering_mode;
+  block_steering_pub->publish(block_steering_msg);
 
-    if (joy_msg->buttons[track_control_button])
+
+  if (joy_msg->buttons[track_control_button])
     {
         if (!track_button_latch)
         {
